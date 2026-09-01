@@ -37,7 +37,7 @@ cd pkg-sources
 ./pkg-sources
 ```
 
-Either way, `~/.local/bin` should be on your `PATH` (it is by default on
+Either way, `~/.local/bin` should be on your `PATH` (it should be by default on
 Arch). Or just run it in place: `./pkg-sources`
 
 ## Usage
