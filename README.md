@@ -1,8 +1,8 @@
 # pkg-sources
 
-**Show where your installed software comes from.** Every package on your
-system, classified by origin — pacman repos, AUR, local builds, Flatpak,
-and Snap. Built for Arch Linux.
+Shows where every package on your Arch system came from — pacman repos,
+AUR, local builds, Flatpak, or Snap. Works on any Arch-based distro
+(Arch, EndeavourOS, Manjaro, CachyOS, ...).
 
 ```
 $ pkg-sources --count
@@ -20,33 +20,25 @@ pacman [multilib]        84
 TOTAL                    1455
 ```
 
-## Features
+## Install
 
-- **Full inventory** — every installed package, not just GUI apps
-- **Accurate AUR detection** — foreign packages are verified against the
-  [AUR RPC API](https://aur.archlinux.org/rpc/) in **batched requests**
-  (500 names per call), so it's fast even with hundreds of AUR packages
-  and needs no per-package `paru`/`yay` round-trips
-- **Custom repo awareness** — `pacman [cidercollective]` shows up just
-  like `pacman [core]`; any repo in your sync DB is detected
-- **Flatpak + Snap** — apps listed with their remote (`flathub`, ...)
-- **GUI mode** — the original `.desktop`-based view, now with versions
-- **Multiple output formats** — grouped report, per-source filter, counts,
-  or JSON for scripting
-
-## Requirements
-
-- Arch Linux (uses `pacman`)
-- `curl` + `jq` for AUR verification (falls back gracefully if missing)
-- `flatpak` / `snap` only needed if you use those
-
-## Installation
+**Option 1 — one-liner (just the script):**
 
 ```sh
-install -m755 pkg-sources ~/.local/bin/pkg-sources
+curl -fsSL https://raw.githubusercontent.com/Outsidetheklub/pkg-sources/main/pkg-sources \
+  -o ~/.local/bin/pkg-sources && chmod +x ~/.local/bin/pkg-sources
 ```
 
-Or just run it in place: `./pkg-sources`
+**Option 2 — clone the repo (get updates, README, license):**
+
+```sh
+git clone https://github.com/Outsidetheklub/pkg-sources
+cd pkg-sources
+./pkg-sources
+```
+
+Either way, `~/.local/bin` should be on your `PATH` (it is by default on
+Arch). Or just run it in place: `./pkg-sources`
 
 ## Usage
 
@@ -55,72 +47,19 @@ pkg-sources                 full inventory, grouped by source
 pkg-sources --gui           only apps with a .desktop launcher
 pkg-sources --aur           only AUR packages
 pkg-sources --source extra  only packages from a given source
-                            (case-insensitive substring:
-                            extra, aur, flathub, cidercollective, ...)
-pkg-sources --count         summary: how many packages per source
-pkg-sources --json          machine-readable output (JSON array)
-pkg-sources --no-aur-check  skip the AUR API lookup (offline use)
+                            (extra, aur, flathub, cidercollective, ...)
+pkg-sources --count         summary per source
+pkg-sources --json          JSON output (pipe to jq)
+pkg-sources --no-aur-check  skip AUR lookup (offline)
 ```
 
-### Example output
+## Notes
 
-```
-$ pkg-sources --source flathub
-
-== flatpak [flathub] (13) ==
-  Discord                                  1.0.155
-  Fedora Media Writer                      5.3.2
-  LocalSend                                1.18.2
-  Telegram                                 5.11.0
-  ...
-```
-
-```
-$ pkg-sources --gui
-
-== AUR (5) ==
-  Bottles                                  2:66.9-1
-  Brave Origin                             1:1.94.117-1
-  Quickshell                               0.3.1.r10.g2d3b3e9-1
-
-== pacman [extra] (84) ==
-  Firefox                                  132.0-1
-  VLC media player                         3.0.21-9
-  ...
-```
-
-```
-$ pkg-sources --json | jq '.[] | select(.source == "AUR")'
-
-{
-  "name": "quickshell-git",
-  "version": "0.3.1.r10.g2d3b3e9-1",
-  "source": "AUR"
-}
-```
-
-## How it works
-
-1. `pacman -Sl` builds a package → repo map from your sync databases
-   (one call, no network).
-2. `pacman -Qn` / `pacman -Qm` list native and foreign packages.
-3. Foreign packages are batch-verified against the AUR RPC API —
-   found = `AUR`, not found = `local` (manual builds, private PKGBUILDs).
-4. `flatpak list` and `snap list` add app sources with their remotes.
-5. In `--gui` mode, `.desktop` files are matched to owners via
-   `pacman -Qo` and the sources above.
-
-## Source classification
-
-| Source                 | Meaning                                              |
-|------------------------|------------------------------------------------------|
-| `pacman [core]`        | Official repo (any repo in your sync DB works)       |
-| `AUR`                  | In the Arch User Repository                          |
-| `local`                | Foreign, **not** in the AUR (manual/private builds)  |
-| `flatpak [flathub]`    | Flatpak app from a remote (shows its name)           |
-| `snap`                 | Snap package                                        |
-| `foreign (unverified)` | Foreign pkg when AUR check skipped / unavailable     |
+- Foreign packages are checked against the AUR API in batches — found =
+  `AUR`, not found = `local` (manual builds, private PKGBUILDs).
+- Needs `curl` and `jq` for the AUR check; falls back gracefully if missing.
+- Flatpak and Snap are only included if you have them installed.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT
