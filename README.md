@@ -37,21 +37,7 @@ cd pkg-sources
 ./pkg-sources
 ```
 
-Optional: symlink it into `~/.local/bin` so you can run it from anywhere:
-`ln -s "$PWD/pkg-sources" ~/.local/bin/pkg-sources`
-
 ## Make sure `~/.local/bin` is on your PATH
-
-The one-liner just drops the script into `~/.local/bin` — it does **not**
-put that directory on your PATH. Contrary to a common belief, Arch does
-not add `~/.local/bin` to your PATH by default (that's a Fedora/Ubuntu
-thing), so this step is on you. First check whether you even need it:
-
-```sh
-command -v pkg-sources   # prints a path → you're already done
-```
-
-If it prints nothing, add the directory for your shell:
 
 - **bash** — append to `~/.bashrc`:
   ```sh
@@ -66,7 +52,7 @@ If it prints nothing, add the directory for your shell:
   fish_add_path ~/.local/bin
   ```
 
-Then open a new terminal (or re-source your config) and verify again with
+Then open a new terminal (or re-source your config) and verify with
 `command -v pkg-sources`.
 
 ## Usage
