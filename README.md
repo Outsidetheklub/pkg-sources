@@ -37,8 +37,37 @@ cd pkg-sources
 ./pkg-sources
 ```
 
-Either way, `~/.local/bin` should be on your `PATH` (it should be by default on
-Arch). Or just run it in place: `./pkg-sources`
+Optional: symlink it into `~/.local/bin` so you can run it from anywhere:
+`ln -s "$PWD/pkg-sources" ~/.local/bin/pkg-sources`
+
+## Make sure `~/.local/bin` is on your PATH
+
+The one-liner just drops the script into `~/.local/bin` — it does **not**
+put that directory on your PATH. Contrary to a common belief, Arch does
+not add `~/.local/bin` to your PATH by default (that's a Fedora/Ubuntu
+thing), so this step is on you. First check whether you even need it:
+
+```sh
+command -v pkg-sources   # prints a path → you're already done
+```
+
+If it prints nothing, add the directory for your shell:
+
+- **bash** — append to `~/.bashrc`:
+  ```sh
+  export PATH="$HOME/.local/bin:$PATH"
+  ```
+- **zsh** — append to `~/.zshrc`:
+  ```sh
+  export PATH="$HOME/.local/bin:$PATH"
+  ```
+- **fish** — run once, or add to `~/.config/fish/config.fish`:
+  ```fish
+  fish_add_path ~/.local/bin
+  ```
+
+Then open a new terminal (or re-source your config) and verify again with
+`command -v pkg-sources`.
 
 ## Usage
 
@@ -57,6 +86,9 @@ pkg-sources --no-aur-check  skip AUR lookup (offline)
 
 - Foreign packages are checked against the AUR API in batches — found =
   `AUR`, not found = `local` (manual builds, private PKGBUILDs).
+  Without `jq` installed the AUR check is skipped and foreign packages
+  show as `foreign (unverified)` — install jq (`sudo pacman -S jq`) for
+  full AUR detection.
 - Needs `curl` and `jq` for the AUR check; falls back gracefully if missing.
 - Flatpak and Snap are only included if you have them installed.
 
