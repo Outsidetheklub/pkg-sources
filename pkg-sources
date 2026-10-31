@@ -2,28 +2,32 @@
 #
 # pkg-sources — show where your installed software comes from.
 #
-# Classifies every installed package by origin:
-#   pacman [repo]   official or custom pacman repositories (core, extra,
-#                   multilib, cidercollective, ...)
-#   AUR             packages from the Arch User Repository (verified via
-#                   the AUR RPC API, batched — no slow per-package calls)
-#   local           foreign packages NOT found in the AUR (manual builds,
-#                   private PKGBUILDs, downloaded binaries)
-#   flatpak [remote] Flatpak applications (system + user, shows remote)
-#   snap            Snap packages (if snapd is installed)
+# Detects which package managers exist instead of assuming a distro:
+#   pacman [repo]    Arch — official or custom repositories (core, extra, …)
+#   AUR              Arch User Repository (batched AUR RPC lookup)
+#   local            foreign packages that are not in the AUR
+#   apt [repo]       Debian/Ubuntu — archive, or a third-party repo by host
+#   apt [local]      installed by hand (dpkg -i, a stray .deb)
+#   flatpak [remote] any — shows the remote
+#   snap             any — if snapd is installed
 #
 # Usage:
-#   pkg-sources                 full inventory, grouped by source
+#   pkg-sources                 explicit installs only (the default)
+#   pkg-sources --all           everything, dependencies included
+#   pkg-sources --dep           only packages installed as dependencies
+#   pkg-sources --no-dep        only explicit installs (same as the default)
 #   pkg-sources --gui           only apps with a .desktop launcher
-#   pkg-sources --aur           only AUR packages
-#   pkg-sources --source extra  only packages from a given source
-#                               (substring match: extra, aur, flathub, ...)
+#   pkg-sources --aur           only AUR packages (Arch only)
+#   pkg-sources --source WORD   only packages from a matching source
+#                               (substring: extra, aur, flathub, nvidia, …)
 #   pkg-sources --count         summary: how many packages per source
 #   pkg-sources --json          machine-readable output (JSON array)
 #   pkg-sources --no-aur-check  skip the AUR API lookup (offline use)
 #
+# A dependency is not something you chose, and it is most of a normal install
+# (285 of 1238 packages here), which is why the default hides them.
+#
 # Exit status: 0 on success, 1 on error.
-
 set -uo pipefail
 
 VERSION="1.1.0"
@@ -35,7 +39,8 @@ VERSION="1.1.0"
 die() { echo "pkg-sources: $*" >&2; exit 1; }
 
 usage() {
-    sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
+    # keep in sync with the header block above
+    sed -n '3,28p' "$0" | sed 's/^# \{0,1\}//'
     echo
     echo "Version $VERSION — MIT licensed."
 }
@@ -51,6 +56,9 @@ FILTER=""          # --source substring filter
 COUNT_ONLY=0
 JSON=0
 AUR_CHECK=1
+DEP_ONLY=0         # --dep: only packages pulled in as dependencies
+NODEP_ONLY=1       # default: only explicitly installed packages (see --all)
+ALL_PKGS=0         # --all: no dependency filtering at all
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -60,6 +68,9 @@ while [[ $# -gt 0 ]]; do
         --count)        COUNT_ONLY=1 ;;
         --json)         JSON=1 ;;
         --no-aur-check) AUR_CHECK=0 ;;
+        --dep)          DEP_ONLY=1; NODEP_ONLY=0; ALL_PKGS=0 ;;
+        --no-dep)       NODEP_ONLY=1; DEP_ONLY=0; ALL_PKGS=0 ;;
+        --all)          ALL_PKGS=1; DEP_ONLY=0; NODEP_ONLY=0 ;;
         -h|--help)      usage; exit 0 ;;
         --version)      echo "pkg-sources $VERSION"; exit 0 ;;
         *)              die "unknown option: $1 (try --help)" ;;
@@ -67,7 +78,15 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 
-have pacman || die "pacman not found — this script is for Arch Linux."
+have pacman || have dpkg-query || \
+    die "no supported package manager found (need pacman or dpkg)"
+SELF_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+BACKEND_DIR="$SELF_DIR/backends"
+
+# --aur is an Arch concept. Failing loudly beats returning an empty list.
+if [[ "$MODE" == "aur" ]] && ! have pacman; then
+    die "--aur needs pacman: the AUR is Arch-only, and this system has no pacman."
+fi
 
 # ----------------------------------------------------------------------
 # Data collection
@@ -131,6 +150,17 @@ if (( ${#FOREIGN[@]} )); then
     fi
 fi
 
+# -- explicit vs dependency ---------------------------------------------
+# One `pacman -Qe` call gives the manually-installed set; everything else
+# was pulled in as a dependency. apt delivers the same signal per row via
+# `apt-mark showmanual` (field 5 of the backend rows).
+declare -A EXPLICIT_OF
+if have pacman; then
+    while read -r pkg _; do
+        [[ -n "${pkg:-}" ]] && EXPLICIT_OF[$pkg]="y"
+    done < <(pacman -Qe 2>/dev/null)
+fi
+
 # -- flatpak -------------------------------------------------------------
 if have flatpak; then
     while IFS=$'\t' read -r appid ver name origin; do
@@ -138,6 +168,7 @@ if have flatpak; then
         name="${name:-$appid}"
         VER_OF[$name]="${ver:-}"
         SRC_OF[$name]="flatpak [${origin:-unknown}]"
+        EXPLICIT_OF[$name]="y"
     done < <(flatpak list --app --columns=application,version,name,origin 2>/dev/null)
 fi
 
@@ -147,7 +178,30 @@ if have snap; then
         [[ "$name" == "Name" || -z "${name:-}" ]] && continue
         VER_OF[$name]="${ver:-}"
         SRC_OF[$name]="snap"
+        EXPLICIT_OF[$name]="y"
     done < <(snap list 2>/dev/null)
+fi
+
+# -- extra backends: apt today, dnf/zypper/apk later ---------------------
+# Each backend is a sourced function library that prints rows of
+#     name <TAB> version <TAB> source <TAB> kind <TAB> explicit
+# and is skipped entirely when its package manager is absent.
+if [[ -d "$BACKEND_DIR" ]]; then
+    for _backend in "$BACKEND_DIR"/*.sh; do
+        [[ -e "$_backend" ]] || continue
+        . "$_backend"
+    done
+fi
+
+if declare -F collect_apt >/dev/null 2>&1 && have dpkg-query; then
+    while IFS=$'\t' read -r _n _v _src _kind _exp; do
+        [[ -n "${_n:-}" ]] || continue
+        # never clobber an entry another backend already classified
+        [[ -n "${SRC_OF[$_n]:-}" ]] && continue
+        VER_OF[$_n]="${_v:-}"
+        SRC_OF[$_n]="apt [${_src}]"
+        EXPLICIT_OF[$_n]="${_exp:-y}"
+    done < <(collect_apt 2>/dev/null)
 fi
 
 # -- gui mode: .desktop launchers ----------------------------------------
@@ -162,7 +216,7 @@ if [[ "$MODE" == "gui" ]]; then
              "$HOME/.local/share/applications" \
              /var/lib/flatpak/exports/share/applications \
              "$HOME/.local/share/flatpak/exports/share/applications" \
-             -type f -name '*.desktop' 2>/dev/null
+             \( -type f -o -type l \) -name '*.desktop' 2>/dev/null
     )
     if (( ${#DESKTOPS[@]} )); then
         # One pass: file -> display name (first Name= per file)
@@ -174,15 +228,29 @@ if [[ "$MODE" == "gui" ]]; then
                 "${DESKTOPS[@]}" 2>/dev/null
         )
 
-        # One bulk call: file -> owning pacman package
+        # One bulk call: file -> owning package. Both managers accept many paths
+        # at once, which is the whole point — per-file calls cost one process
+        # start each, and that was the original 25 s.
         declare -A OWNER_OF
-        while IFS= read -r line; do
-            file="${line%% is owned by *}"
-            owner="${line#* is owned by }"
-            owner="${owner%% *}"
-            [[ -n "$file" && -n "$owner" ]] || continue
-            OWNER_OF[$file]="$owner"
-        done < <(pacman -Qo "${DESKTOPS[@]}" 2>/dev/null)
+        if have pacman; then
+            while IFS= read -r line; do
+                file="${line%% is owned by *}"
+                owner="${line#* is owned by }"
+                owner="${owner%% *}"
+                [[ -n "$file" && -n "$owner" ]] || continue
+                OWNER_OF[$file]="$owner"
+            done < <(pacman -Qo "${DESKTOPS[@]}" 2>/dev/null)
+        elif have dpkg; then
+            # dpkg -S prints "pkg: /path"; several packages are comma separated
+            while IFS= read -r line; do
+                owner="${line%%:*}"
+                path="${line#*: }"
+                [[ -n "$owner" && -n "$path" ]] || continue
+                for d in "${DESKTOPS[@]}"; do
+                    if [[ "$d" == "$path" ]]; then OWNER_OF[$d]="$owner"; break; fi
+                done
+            done < <(dpkg -S "${DESKTOPS[@]}" 2>/dev/null)
+        fi
 
         for file in "${DESKTOPS[@]}"; do
             name="${NAME_OF[$file]:-}"
@@ -197,7 +265,10 @@ if [[ "$MODE" == "gui" ]]; then
             elif [[ -n "$owner" && -n "${SRC_OF[$owner]:-}" ]]; then
                 GUI_APPS[$name]="${SRC_OF[$owner]}"
                 GUI_VER[$name]="${VER_OF[$owner]:-}"
-            else
+            elif [[ -z "${GUI_APPS[$name]:-}" ]]; then
+                # Never downgrade an app another .desktop already classified:
+                # packaged apps often also ship a userapp-*.desktop copy in
+                # ~/.local/share/applications, which has no owning package.
                 GUI_APPS[$name]="local"
             fi
         done
@@ -229,6 +300,22 @@ if [[ -n "$FILTER" ]]; then
             *"${FILTER,,}"*) ;;
             *) unset 'OUT_SRC[$name]' 'OUT_VER[$name]' ;;
         esac
+    done
+fi
+
+# Apply --dep / --no-dep (snapshot the keys: unsetting while iterating an
+# associative array is asking for trouble)
+if (( (DEP_ONLY || NODEP_ONLY) && ! ALL_PKGS )); then
+    mapfile -t _keys < <(printf '%s\n' "${!OUT_SRC[@]}")
+    for name in "${_keys[@]}"; do
+        [[ -z "${name:-}" ]] && continue
+        _exp="${EXPLICIT_OF[$name]:-y}"
+        if (( DEP_ONLY )) && [[ "$_exp" != "n" ]]; then
+            unset 'OUT_SRC[$name]' 'OUT_VER[$name]'
+        fi
+        if (( NODEP_ONLY )) && [[ "$_exp" != "y" ]]; then
+            unset 'OUT_SRC[$name]' 'OUT_VER[$name]'
+        fi
     done
 fi
 
