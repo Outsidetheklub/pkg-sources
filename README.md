@@ -1,82 +1,123 @@
 # pkg-sources
 
-Shows where every package on your Arch system came from — pacman repos,
-AUR, local builds, Flatpak, or Snap. Works on any Arch-based distro
-(Arch, EndeavourOS, Manjaro, CachyOS, ...).
+Shows where every package on your system came from — without assuming a distro.
+It detects which package managers are installed and reports whichever answer,
+so the same script works on Arch and Debian:
+
+| manager | classified as |
+| --- | --- |
+| pacman | `pacman [repo]` (core, extra, custom repos…), `AUR`, `local` |
+| apt | `apt [<repo host/suite>]` for archive packages, `apt [<host>]` for third-party repos, `apt [local]` for hand-installed `.deb` |
+| flatpak | `flatpak [remote]` |
+| snap | `snap` |
+
+A package manager that is not installed produces no section at all — there is
+no Arch build and no Debian build, and you never see an empty manager listed.
+
+By default it lists **explicitly installed** packages only. A dependency is not
+something you chose, and on a normal Debian box it is most of the install
+(1238 → 285 here). `--all` brings the dependencies back, `--dep` shows only them.
 
 ```
 $ pkg-sources --count
 
 SOURCE                   COUNT
 ------------------------ -----
-AUR                      20
-flatpak [flathub]        13
-local                    5
-pacman [cidercollective] 1
-pacman [core]            209
-pacman [extra]           1122
-pacman [multilib]        84
+apt [deb.debian.org/trixie] 277
+apt [developer.download.nvidia.com] 2
+apt [download.opensuse.org] 1
+apt [security.debian.org/trixie-security] 1
+flatpak [flathub]        4
 
-TOTAL                    1455
+TOTAL                    285
 ```
+
+With `--all`, the same machine:
+
+```
+apt [deb.debian.org/trixie] 1179
+apt [developer.download.nvidia.com] 50
+apt [download.opensuse.org] 1
+apt [security.debian.org/trixie-security] 4
+flatpak [flathub]        4
+
+TOTAL                    1238
+```
+
+On Arch the sections read `pacman [core]`, `pacman [extra]`, `AUR`, `local`…
 
 ## Install
 
-**Option 1 — one-liner (just the script):**
+**Clone the repo — the script needs `backends/` beside it:**
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Outsidetheklub/pkg-sources/main/pkg-sources \
-  -o ~/.local/bin/pkg-sources && chmod +x ~/.local/bin/pkg-sources
+git clone git@github.com:Outsidetheklub/pkg-sources.git ~/pkg-sources
+~/pkg-sources/pkg-sources
 ```
 
-**Option 2 — clone the repo (get updates, README, license):**
+> ⚠️ The old one-liner that downloaded only `pkg-sources` no longer works: the
+> apt support lives in `backends/apt.sh`, and a lone script silently reports
+> flatpak/snap only (4 packages instead of 285). If you have one from an older
+> version, replace it with a launcher that execs the checkout.
+
+Put it on `PATH` yourself, or symlink it:
 
 ```sh
-git clone https://github.com/Outsidetheklub/pkg-sources
-cd pkg-sources
-./pkg-sources
+ln -sf ~/pkg-sources/pkg-sources ~/.local/bin/pkg-sources
 ```
 
-## Make sure `~/.local/bin` is on your PATH
-
-- **bash** — append to `~/.bashrc`:
-  ```sh
-  export PATH="$HOME/.local/bin:$PATH"
-  ```
-- **zsh** — append to `~/.zshrc`:
-  ```sh
-  export PATH="$HOME/.local/bin:$PATH"
-  ```
-- **fish** — run once, or add to `~/.config/fish/config.fish`:
-  ```fish
-  fish_add_path ~/.local/bin
-  ```
-
-Then open a new terminal (or re-source your config) and verify with
-`command -v pkg-sources`.
+`~/.local/bin` is on `PATH` in most setups; for bash/zsh add
+`export PATH="$HOME/.local/bin:$PATH"`, for fish run `fish_add_path ~/.local/bin`.
 
 ## Usage
 
 ```
-pkg-sources                 full inventory, grouped by source
+pkg-sources                 explicitly installed packages (default)
+pkg-sources --all           everything, dependencies included
+pkg-sources --dep           only packages installed as dependencies
+pkg-sources --no-dep        only explicit installs (same as the default)
 pkg-sources --gui           only apps with a .desktop launcher
-pkg-sources --aur           only AUR packages
-pkg-sources --source extra  only packages from a given source
-                            (extra, aur, flathub, cidercollective, ...)
+pkg-sources --aur           only AUR packages (Arch only)
+pkg-sources --source WORD   only matching sources, substring:
+                            extra, aur, flathub, nvidia, trixie, …
 pkg-sources --count         summary per source
 pkg-sources --json          JSON output (pipe to jq)
-pkg-sources --no-aur-check  skip AUR lookup (offline)
+pkg-sources --no-aur-check  skip the AUR lookup (offline)
 ```
+
+Flags that need an absent backend fail loudly instead of returning nothing —
+`--aur` on Debian exits 1 with an explanation.
+
+## How each backend finds the origin
+
+- **pacman** — repo map from `pacman -Sl`; native packages from `pacman -Qn`;
+  foreign ones (`pacman -Qm`) verified against the AUR RPC API in batches of
+  500. Anything foreign that the AUR does not know is `local`.
+- **apt** — one pass over `/var/lib/apt/lists/*_Packages`; the list *filename*
+  encodes the origin (`deb.debian.org_debian_dists_trixie_main_…`), so the host
+  is everything before the first `_`. `explicit` comes from
+  `apt-mark showmanual`, and `${db:Status-Abbrev}` keeps removed-but-conffiles
+  packages out of the count.
+- **flatpak / snap** — straight from their own listings, always explicit.
+
+## Performance
+
+The point is to never pay a process start per package:
+
+- apt: 1235 packages in **0.19 s** (a per-package `apt-cache policy` loop is
+  roughly 100× slower for the same answer)
+- pacman: **2.6 s** full inventory, **2.5 s** with `--gui`, after batching
+  `-Qm` and `-Qo` into single calls
 
 ## Notes
 
-- Foreign packages are checked against the AUR API in batches — found =
-  `AUR`, not found = `local` (manual builds, private PKGBUILDs).
-  Without `jq` installed the AUR check is skipped and foreign packages
-  show as `foreign (unverified)` — install jq (`sudo pacman -S jq`) for
-  full AUR detection.
-- Needs `curl` and `jq` for the AUR check; falls back gracefully if missing.
-- Flatpak and Snap are only included if you have them installed.
+- The AUR check needs `curl` and `jq`; without them foreign packages show as
+  `foreign (unverified)` instead of `AUR`/`local`.
+- `--gui` resolves .desktop ownership in one bulk call (`pacman -Qo` or
+  `dpkg -S`). Flatpak exports are symlinks, which is why the file scan accepts
+  symlinks as well as regular files.
+- Known gap: on a duplicate package name across repos, the first apt list read
+  wins. Preferring the entry whose version matches the installed one is the fix.
 
 ## License
 
